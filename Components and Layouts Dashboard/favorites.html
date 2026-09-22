@@ -14,14 +14,14 @@
   button, a.btn { background: #262626; color: #ddd; border: 1px solid #333; border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; text-decoration: none; }
   button:hover, a.btn:hover { border-color: #555; }
   button.danger:hover { border-color: #a33; color: #f99; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, max-content)); gap: 22px; align-items: start; }
-  .card { background: #161616; border: 1px solid #262626; border-radius: 12px; overflow: hidden; display: inline-flex; flex-direction: column; }
+  .list { display: flex; flex-direction: column; gap: 28px; max-width: 1400px; margin: 0 auto; }
+  .card { background: #161616; border: 1px solid #262626; border-radius: 12px; overflow: hidden; }
   .card .head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid #262626; }
-  .card .head .title { font-size: 13px; font-weight: 600; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .head .title { font-size: 13px; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .card .head .meta { font-size: 11px; color: #777; white-space: nowrap; }
   .card .head button, .card .head a.btn { padding: 4px 9px; font-size: 12px; }
-  .viewport { position: relative; overflow: hidden; background: #fff; }
-  .viewport iframe { position: absolute; border: 0; pointer-events: auto; }
+  .viewport { position: relative; overflow: hidden; background: #fff; margin: 0 auto; }
+  .viewport iframe { position: absolute; border: 0; }
   .empty { text-align: center; color: #777; padding: 80px 20px; font-size: 14px; }
   .empty a { color: #6cf; }
 </style>
@@ -35,37 +35,42 @@
   <button id="export">Export JSON</button>
   <button id="clear" class="danger">Clear all</button>
 </header>
-<div id="grid" class="grid"></div>
+<div id="list" class="list"></div>
 <div id="empty" class="empty" style="display:none">
-  No favourites yet. Open the viewer, click <b>&#127919; Select component</b>, then click the exact component you like.
+  No favourites yet. Open the viewer and click the &#9734; on any component you like.
 </div>
 
 <script>
 const FAV_KEY = "ui-viewer-favorites";
-const MAX_DISPLAY_W = 460; // cards wider than this get scaled down, not cropped further
 
-const grid = document.getElementById("grid");
+const list = document.getElementById("list");
 const empty = document.getElementById("empty");
 const countEl = document.getElementById("count");
 
 function getFavs() {
   try { return JSON.parse(localStorage.getItem(FAV_KEY) || "[]"); } catch { return []; }
 }
-function saveFavs(list) { localStorage.setItem(FAV_KEY, JSON.stringify(list)); }
+function saveFavs(favs) { localStorage.setItem(FAV_KEY, JSON.stringify(favs)); }
 
 function render() {
-  const favs = getFavs();
+  let favs = getFavs();
+  // drop anything saved by an older version of this page that didn't
+  // record a proper width/height (would otherwise render as a broken,
+  // tiny, scrollable box)
+  const valid = favs.filter(f => f && f.file && Number.isFinite(f.w) && Number.isFinite(f.h) && f.w > 0 && f.h > 0);
+  if (valid.length !== favs.length) { favs = valid; saveFavs(favs); }
+
   countEl.textContent = favs.length ? `(${favs.length})` : "";
-  if (!favs.length) {
-    grid.innerHTML = "";
-    empty.style.display = "block";
-    return;
-  }
-  empty.style.display = "none";
-  grid.innerHTML = "";
+  list.innerHTML = "";
+  empty.style.display = favs.length ? "none" : "block";
+  if (!favs.length) return;
+
+  // as wide as the page allows (up to the component's own natural width) —
+  // never shrunk into a small thumbnail, only scaled down if it wouldn't fit
+  const available = Math.min(1400, window.innerWidth - 48);
 
   favs.forEach((f, i) => {
-    const scale = Math.min(1, MAX_DISPLAY_W / f.w);
+    const scale = Math.min(1, available / f.w);
     const dispW = Math.round(f.w * scale);
     const dispH = Math.round(f.h * scale);
 
@@ -86,10 +91,10 @@ function render() {
         </iframe>
       </div>
     `;
-    grid.appendChild(card);
+    list.appendChild(card);
   });
 
-  grid.querySelectorAll("button[data-i]").forEach(b => {
+  list.querySelectorAll("button[data-i]").forEach(b => {
     b.addEventListener("click", () => {
       const i = +b.dataset.i;
       const favs = getFavs();
@@ -112,6 +117,12 @@ document.getElementById("export").addEventListener("click", () => {
   a.href = URL.createObjectURL(blob);
   a.download = "favourites.json";
   a.click();
+});
+
+let resizeTimer;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(render, 150);
 });
 
 render();

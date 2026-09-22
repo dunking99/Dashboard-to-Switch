@@ -15,13 +15,11 @@
   button, a.btn { background: #262626; color: #ddd; border: 1px solid #333; border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; text-decoration: none; }
   button.active { background: #f2f2f2; color: #111; border-color: #f2f2f2; font-weight: 600; }
   button:disabled { opacity: .4; cursor: not-allowed; }
-  #select-btn.active { background: #e0c34a; color: #111; border-color: #e0c34a; }
   .spacer { flex: 1; }
   main { flex: 1; position: relative; display: flex; justify-content: center; align-items: stretch; overflow: auto; background: #0b0b0b; }
   main.framed { padding: 16px; }
   iframe { border: 0; background: #fff; width: 100%; height: 100%; transition: width .2s ease; }
   #loading { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; gap: 8px; background: rgba(11,11,11,.85); color: #bbb; z-index: 2; }
-  #select-banner { position: absolute; top: 0; left: 0; right: 0; display: none; align-items: center; justify-content: center; gap: 10px; padding: 8px; background: #e0c34a; color: #111; font-size: 13px; font-weight: 600; z-index: 3; }
   .empty { color: #666; font-size: 13px; padding: 40px; text-align: center; }
 </style>
 </head>
@@ -59,7 +57,6 @@
 </div>
 
 <main id="stage">
-  <div id="select-banner">Click a highlighted block to save it &nbsp;·&nbsp; &uarr;/&darr; widen or narrow &nbsp;·&nbsp; keeps saving until you press Esc</div>
   <iframe id="frame" title="Design preview"></iframe>
   <div id="loading"><div>Loading design&hellip;</div></div>
 </main>
@@ -124,7 +121,6 @@
   const catWrap      = document.getElementById("cat-buttons");
   const subWrap      = document.getElementById("sub-buttons");
   const designWrap   = document.getElementById("design-buttons");
-  const selectBanner = document.getElementById("select-banner");
 
   const categories = Object.keys(CATALOG);
   let activeCat = categories[0];
@@ -196,7 +192,6 @@
   function load() {
     const d = currentList()[activeIdx];
     if (!d) return;
-    exitSelectMode();
     loading.style.display = "flex";
     frame.src = encodeURI(d.file);
     openTab.href = encodeURI(d.file);
@@ -209,7 +204,10 @@
     } catch (e) {}
   }
 
-  frame.addEventListener("load", () => { loading.style.display = "none"; });
+  frame.addEventListener("load", () => {
+    loading.style.display = "none";
+    injectFavButtons();
+  });
 
   document.querySelectorAll("button.size").forEach(b => {
     b.addEventListener("click", () => {
@@ -235,7 +233,6 @@
 
   window.addEventListener("keydown", (e) => {
     if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
-    if (selectMode && e.key === "Escape") { exitSelectMode(); return; }
     if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
       const n = currentList().length;
       if (!n) return;
@@ -254,12 +251,11 @@
     }
   } catch (e) {}
 
-  // ============ FAVOURITES (click-to-select an element, not a screenshot) ============
+  // ============ FAVOURITES ============
+  // A small ☆ pin sits directly on every detected component, all the
+  // time — no mode to turn on, no click-to-select. Click the pin, it's
+  // favourited; click again, it isn't.
   const FAV_KEY = "ui-viewer-favorites";
-  let selectMode = false;
-  let hoverEl = null;   // currently highlighted element
-  let leafEl = null;    // innermost element under the cursor (level 0)
-  let level = 0;        // how many ancestors up from leafEl
 
   function getFavs() {
     try { return JSON.parse(localStorage.getItem(FAV_KEY) || "[]"); } catch { return []; }
@@ -272,23 +268,14 @@
     try { return frame.contentDocument; } catch (e) { return null; }
   }
 
-  function setHighlight(el) {
-    if (hoverEl && hoverEl !== el) hoverEl.style.outline = "";
-    hoverEl = el;
-    if (hoverEl) hoverEl.style.outline = "2px solid #e0c34a";
-  }
-
   // Heuristic: does this element look like a self-contained "card" /
   // labelled block (bordered, shadowed, rounded, or a distinct background
-  // from its parent)? Design files almost always box up each idea this
-  // way, regardless of what class names or markup convention they use —
-  // so this lets hover land on the whole "1.A" block directly instead of
-  // whatever tiny leaf (a label, a toggle) happens to be under the cursor.
+  // from its parent) big enough to be a whole design? Design files almost
+  // always box up each idea this way, whatever their markup convention —
+  // so this finds each "1.A"-style block automatically without knowing
+  // anything about how that particular file is structured.
   function looksLikeCard(el) {
     if (!el || /^(BODY|HTML)$/.test(el.tagName)) return false;
-    // small interactive controls (toggle pills, tabs, buttons, links) are
-    // never the intended "whole design" target even when they're styled
-    // just as boxily as the card they sit inside
     if (/^(BUTTON|A|INPUT|SELECT|TEXTAREA|LABEL)$/.test(el.tagName)) return false;
     const rect = el.getBoundingClientRect();
     if (rect.width < 160 || rect.height < 80) return false;
@@ -302,134 +289,113 @@
     return false;
   }
 
-  function autoSnapLevel(leaf) {
-    let el = leaf, steps = 0;
-    const MAX_STEPS = 10;
-    while (el && steps < MAX_STEPS) {
-      if (looksLikeCard(el)) return steps;
-      if (!el.parentElement || /^(BODY|HTML)$/.test(el.parentElement.tagName)) break;
-      el = el.parentElement;
-      steps++;
-    }
-    return 0; // nothing card-like nearby — fall back to the exact leaf
+  // Find every card-like block, keeping only the outermost ones (skip a
+  // card nested inside another card, so each idea gets exactly one pin).
+  function findCards(doc) {
+    const all = [...doc.body.querySelectorAll("*")];
+    const candidates = all.filter(looksLikeCard);
+    const set = new Set(candidates);
+    const outer = candidates.filter(el => {
+      let p = el.parentElement;
+      while (p) { if (set.has(p)) return false; p = p.parentElement; }
+      return true;
+    });
+    return outer.length ? outer : [doc.body]; // fall back: pin the whole page
   }
 
-  function onMouseOver(e) {
-    leafEl = e.target;
-    level = autoSnapLevel(leafEl);
-    let target = leafEl;
-    for (let i = 0; i < level; i++) target = target.parentElement;
-    setHighlight(target);
-    // hovering an iframe doesn't give it real browser focus in real browsers
-    // (only the iframe *element* gaining focus routes keydown into it) —
-    // force that so arrow-key widen/narrow works without requiring a click first
-    if (document.activeElement !== frame) frame.focus({ preventScroll: true });
-  }
-
-  function onKeyDown(e) {
-    if (!leafEl) return;
-    if (e.key === "ArrowUp") {
-      let target = leafEl;
-      for (let i = 0; i < level + 1; i++) {
-        if (!target.parentElement || /^(BODY|HTML)$/.test(target.parentElement.tagName)) break;
-        target = target.parentElement;
-      }
-      if (target !== hoverEl) { level++; setHighlight(target); }
-      e.preventDefault();
-    } else if (e.key === "ArrowDown") {
-      if (level > 0) {
-        level--;
-        let target = leafEl;
-        for (let i = 0; i < level; i++) target = target.parentElement;
-        setHighlight(target);
-      }
-      e.preventDefault();
-    } else if (e.key === "Escape") {
-      exitSelectMode();
-    }
-  }
-
-  function onClick(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    const el = hoverEl || e.target;
+  function cardBox(card) {
     const win = frame.contentWindow;
-    const rect = el.getBoundingClientRect();
-    const x = Math.round(rect.left + win.scrollX);
-    const y = Math.round(rect.top + win.scrollY);
-    const w = Math.round(rect.width);
-    const h = Math.round(rect.height);
-    if (w < 4 || h < 4) return; // ignore degenerate targets
-
-    const d = currentList()[activeIdx];
-    const label = `${activeCat} · ${activeSub} · ${d.short}`;
-    const fav = {
-      file: d.file, label,
-      x, y, w, h,
-      pageW: win.innerWidth || 1440,
-      added: Date.now()
+    const rect = card.getBoundingClientRect();
+    return {
+      x: Math.round(rect.left + win.scrollX),
+      y: Math.round(rect.top + win.scrollY),
+      w: Math.round(rect.width),
+      h: Math.round(rect.height)
     };
+  }
+
+  function findFavIndex(favs, file, box) {
+    return favs.findIndex(f => f.file === file && Math.abs(f.x - box.x) < 3 && Math.abs(f.y - box.y) < 3);
+  }
+
+  function toggleFav(card, btn) {
+    const d = currentList()[activeIdx];
+    if (!d) return;
+    const box = cardBox(card);
     const favs = getFavs();
-    favs.push(fav);
-    saveFavs(favs);
-    flashSaved(el);
-    // stay in select mode — saving one block shouldn't force re-clicking
-    // "Select component" to save the next one on the same page
-  }
-
-  function flashSaved(el) {
-    el.style.outline = "2px solid #6cff9a";
-    setTimeout(() => { if (hoverEl !== el) el.style.outline = ""; }, 350);
-    flashSelectBtn();
-  }
-
-  function enterSelectMode() {
-    const doc = frameDoc();
-    if (!doc) return;
-    selectMode = true;
-    document.getElementById("select-btn").classList.add("active");
-    selectBanner.style.display = "flex";
-    doc.body.style.cursor = "crosshair";
-    doc.addEventListener("mouseover", onMouseOver, true);
-    doc.addEventListener("click", onClick, true);
-    doc.addEventListener("keydown", onKeyDown, true);
-  }
-
-  function exitSelectMode() {
-    selectMode = false;
-    document.getElementById("select-btn").classList.remove("active");
-    selectBanner.style.display = "none";
-    const doc = frameDoc();
-    if (doc) {
-      doc.body.style.cursor = "";
-      doc.removeEventListener("mouseover", onMouseOver, true);
-      doc.removeEventListener("click", onClick, true);
-      doc.removeEventListener("keydown", onKeyDown, true);
+    const idx = findFavIndex(favs, d.file, box);
+    if (idx >= 0) {
+      favs.splice(idx, 1);
+      saveFavs(favs);
+      btn.textContent = "☆";
+      btn.title = "Add to favourites";
+    } else {
+      favs.push({
+        file: d.file,
+        label: `${activeCat} · ${activeSub} · ${d.short}`,
+        x: box.x, y: box.y, w: box.w, h: box.h,
+        pageW: frame.contentWindow.innerWidth || 1440,
+        added: Date.now()
+      });
+      saveFavs(favs);
+      btn.textContent = "★";
+      btn.title = "Remove from favourites";
     }
-    if (hoverEl) { hoverEl.style.outline = ""; hoverEl = null; }
-    leafEl = null;
-    level = 0;
   }
 
-  function flashSelectBtn() {
-    const b = document.getElementById("select-btn");
-    if (!b) return;
-    const original = "🎯 Select component";
-    b.textContent = "★ Saved";
-    setTimeout(() => { b.textContent = original; }, 1200);
+  function injectFavButtons() {
+    const doc = frameDoc();
+    if (!doc || !doc.body) return;
+    const d = currentList()[activeIdx];
+    if (!d) return;
+    const favs = getFavs();
+    findCards(doc).forEach(card => {
+      if (card.dataset.favPinned) return;
+      card.dataset.favPinned = "1";
+      if (getComputedStyle(card).position === "static") card.style.position = "relative";
+
+      const btn = doc.createElement("button");
+      btn.type = "button";
+      const box = cardBox(card);
+      const already = findFavIndex(favs, d.file, box) >= 0;
+      btn.textContent = already ? "★" : "☆";
+      btn.title = already ? "Remove from favourites" : "Add to favourites";
+      Object.assign(btn.style, {
+        position: "absolute", top: "6px", right: "6px", zIndex: "999999",
+        width: "30px", height: "30px", padding: "0", lineHeight: "28px",
+        borderRadius: "50%", border: "1px solid rgba(255,255,255,.35)",
+        background: "rgba(15,15,15,.65)", color: "#f2d24a",
+        fontSize: "16px", cursor: "pointer",
+        boxShadow: "0 1px 4px rgba(0,0,0,.4)", fontFamily: "sans-serif"
+      });
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleFav(card, btn);
+      }, true);
+      card.appendChild(btn);
+    });
   }
 
-  // inject the select-mode button into the header (next to prev/next)
+  // keep pin states in sync if a favourite is removed on the favorites.html tab
+  window.addEventListener("storage", (e) => {
+    if (e.key !== FAV_KEY) return;
+    const doc = frameDoc();
+    const d = currentList()[activeIdx];
+    if (!doc || !d) return;
+    const favs = getFavs();
+    doc.querySelectorAll("[data-fav-pinned]").forEach(card => {
+      const btn = card.querySelector(":scope > button");
+      if (!btn) return;
+      const already = findFavIndex(favs, d.file, cardBox(card)) >= 0;
+      btn.textContent = already ? "★" : "☆";
+    });
+  });
+
+  // header link to the favourites page
   (function() {
     const header = document.querySelector("header .group:last-child");
     if (!header) return;
-    const b = document.createElement("button");
-    b.id = "select-btn";
-    b.textContent = "🎯 Select component";
-    b.title = "Click a specific component on the page to save it as a live favourite";
-    b.addEventListener("click", () => { selectMode ? exitSelectMode() : enterSelectMode(); });
-    header.insertBefore(b, header.firstChild);
-
     const fav = document.createElement("a");
     fav.href = "favorites.html";
     fav.className = "btn";
