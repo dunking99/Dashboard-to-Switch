@@ -268,17 +268,62 @@
     try { return frame.contentDocument; } catch (e) { return null; }
   }
 
-  // Heuristic: does this element look like a self-contained "card" /
-  // labelled block (bordered, shadowed, rounded, or a distinct background
-  // from its parent) big enough to be a whole design? Design files almost
-  // always box up each idea this way, whatever their markup convention —
-  // so this finds each "1.A"-style block automatically without knowing
-  // anything about how that particular file is structured.
+  // Every one of these "Components" files consistently captions each of
+  // its variants "1.a", "1.b", "1.c", "2.a", ... right next to it (checked
+  // across four different files' worth of AI-generated markup) — even
+  // though the actual HTML *around* that caption differs completely from
+  // file to file (siblings in one, a <figcaption>/<span> pair sharing a
+  // wrapper in another). So: match on that text pattern directly instead
+  // of guessing from CSS. That's a deterministic, per-file-structure-proof
+  // way to find exactly the 3 variants of each idea.
+  const LABEL_RE = /^\s*\d{1,3}\.[a-c]\b/i;
+
+  function bigEnough(el) {
+    const r = el.getBoundingClientRect();
+    return r.width >= 160 && r.height >= 80;
+  }
+
+  function findLabeledVariants(doc) {
+    const labels = [...doc.body.querySelectorAll("*")].filter(el => {
+      const ownText = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join("").trim();
+      return ownText && ownText.length < 120 && LABEL_RE.test(ownText);
+    });
+    if (labels.length < 2) return null; // this file doesn't use the convention
+
+    function countLabelsInside(el) {
+      let n = 0;
+      for (const l of labels) if (el.contains(l)) n++;
+      return n;
+    }
+
+    const pins = [];
+    for (const label of labels) {
+      // Pattern A: label and its target design are plain siblings
+      let sib = label.nextElementSibling;
+      while (sib && !bigEnough(sib)) sib = sib.nextElementSibling;
+      if (sib) { pins.push(sib); continue; }
+
+      // Pattern B: label is nested inside the same wrapper as its target
+      // (e.g. a <figcaption> next to a content <div>, both children of a
+      // <figure>) — climb up until we reach a big-enough ancestor that
+      // still belongs to just this one label, not the whole idea group
+      let node = label;
+      for (let i = 0; i < 8 && node; i++) {
+        if (bigEnough(node) && countLabelsInside(node) === 1) { pins.push(node); break; }
+        node = node.parentElement;
+      }
+    }
+    return pins.length ? pins : null;
+  }
+
+  // Fallback for files that don't use the "N.a/N.b/N.c" convention at all
+  // (a Page Layout file is a single full-page design, not several
+  // numbered variants) — look for one large bordered/shadowed/rounded
+  // block, or just pin the whole page.
   function looksLikeCard(el) {
     if (!el || /^(BODY|HTML)$/.test(el.tagName)) return false;
     if (/^(BUTTON|A|INPUT|SELECT|TEXTAREA|LABEL)$/.test(el.tagName)) return false;
-    const rect = el.getBoundingClientRect();
-    if (rect.width < 160 || rect.height < 80) return false;
+    if (!bigEnough(el)) return false;
     const cs = getComputedStyle(el);
     if (cs.borderTopWidth !== "0px" && cs.borderTopStyle !== "none") return true;
     if (cs.boxShadow && cs.boxShadow !== "none") return true;
@@ -289,18 +334,18 @@
     return false;
   }
 
-  // Find every card-like block, keeping only the outermost ones (skip a
-  // card nested inside another card, so each idea gets exactly one pin).
   function findCards(doc) {
-    const all = [...doc.body.querySelectorAll("*")];
-    const candidates = all.filter(looksLikeCard);
+    const labeled = findLabeledVariants(doc);
+    if (labeled) return labeled;
+
+    const candidates = [...doc.body.querySelectorAll("*")].filter(looksLikeCard);
     const set = new Set(candidates);
     const outer = candidates.filter(el => {
       let p = el.parentElement;
       while (p) { if (set.has(p)) return false; p = p.parentElement; }
       return true;
     });
-    return outer.length ? outer : [doc.body]; // fall back: pin the whole page
+    return outer.length ? outer : [doc.body];
   }
 
   function cardBox(card) {

@@ -6,22 +6,31 @@
 <title>Favourites</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: #111; color: #eee; font-family: sans-serif; padding: 20px 24px 60px; }
-  header { display: flex; align-items: center; gap: 16px; padding-bottom: 18px; border-bottom: 1px solid #2c2c2c; margin-bottom: 22px; }
-  h1 { font-size: 18px; font-weight: 600; }
+  body { background: #111; color: #eee; font-family: sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 16px; background: #1b1b1b; border-bottom: 1px solid #2c2c2c; }
+  h1 { font-size: 16px; font-weight: 600; }
   header .count { color: #888; font-size: 13px; }
   header .spacer { flex: 1; }
   button, a.btn { background: #262626; color: #ddd; border: 1px solid #333; border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; text-decoration: none; }
   button:hover, a.btn:hover { border-color: #555; }
   button.danger:hover { border-color: #a33; color: #f99; }
-  .list { display: flex; flex-direction: column; gap: 28px; max-width: 1400px; margin: 0 auto; }
-  .card { background: #161616; border: 1px solid #262626; border-radius: 12px; overflow: hidden; }
-  .card .head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid #262626; }
-  .card .head .title { font-size: 13px; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .card .head .meta { font-size: 11px; color: #777; white-space: nowrap; }
-  .card .head button, .card .head a.btn { padding: 4px 9px; font-size: 12px; }
-  .viewport { position: relative; overflow: hidden; background: #fff; margin: 0 auto; }
+
+  .list { display: flex; flex-direction: column; }
+  .item { position: relative; border-bottom: 8px solid #111; }
+  .item .toolbar {
+    position: absolute; top: 8px; right: 8px; z-index: 10;
+    display: flex; align-items: center; gap: 6px;
+    background: rgba(15,15,15,.72); border: 1px solid rgba(255,255,255,.15);
+    border-radius: 8px; padding: 5px 6px;
+    opacity: .35; transition: opacity .15s ease;
+  }
+  .item .toolbar:hover, .item:hover .toolbar { opacity: 1; }
+  .item .toolbar .title { font-size: 12px; font-weight: 600; color: #eee; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 4px; }
+  .item .toolbar button, .item .toolbar a.btn { padding: 3px 8px; font-size: 11px; }
+
+  .viewport { position: relative; overflow: hidden; background: #fff; }
   .viewport iframe { position: absolute; border: 0; }
+
   .empty { text-align: center; color: #777; padding: 80px 20px; font-size: 14px; }
   .empty a { color: #6cf; }
 </style>
@@ -65,21 +74,20 @@ function render() {
   empty.style.display = favs.length ? "none" : "block";
   if (!favs.length) return;
 
-  // as wide as the page allows (up to the component's own natural width) —
-  // never shrunk into a small thumbnail, only scaled down if it wouldn't fit
-  const available = Math.min(1400, window.innerWidth - 48);
+  // full page width, identical to how it looks in the real file — only
+  // scaled down if the browser window itself is narrower than the design
+  const available = window.innerWidth;
 
   favs.forEach((f, i) => {
     const scale = Math.min(1, available / f.w);
     const dispW = Math.round(f.w * scale);
     const dispH = Math.round(f.h * scale);
 
-    const card = document.createElement("div");
-    card.className = "card";
-    card.innerHTML = `
-      <div class="head">
+    const item = document.createElement("div");
+    item.className = "item";
+    item.innerHTML = `
+      <div class="toolbar">
         <span class="title" title="${escapeAttr(f.label)}">${escapeHtml(f.label)}</span>
-        <span class="meta">${f.w}&times;${f.h}px</span>
         <a class="btn" href="${encodeURI(f.file)}" target="_blank" rel="noopener" title="Open the full file in a new tab">&#8599;</a>
         <button class="danger" data-i="${i}" title="Remove">&#10005;</button>
       </div>
@@ -91,7 +99,7 @@ function render() {
         </iframe>
       </div>
     `;
-    list.appendChild(card);
+    list.appendChild(item);
   });
 
   list.querySelectorAll("button[data-i]").forEach(b => {
