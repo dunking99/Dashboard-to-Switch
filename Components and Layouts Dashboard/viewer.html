@@ -59,7 +59,7 @@
 </div>
 
 <main id="stage">
-  <div id="select-banner">Click to save &nbsp;·&nbsp; &uarr; widen / &darr; narrow selection &nbsp;·&nbsp; Esc to cancel</div>
+  <div id="select-banner">Click a highlighted block to save it &nbsp;·&nbsp; &uarr;/&darr; widen or narrow &nbsp;·&nbsp; keeps saving until you press Esc</div>
   <iframe id="frame" title="Design preview"></iframe>
   <div id="loading"><div>Loading design&hellip;</div></div>
 </main>
@@ -278,12 +278,48 @@
     if (hoverEl) hoverEl.style.outline = "2px solid #e0c34a";
   }
 
+  // Heuristic: does this element look like a self-contained "card" /
+  // labelled block (bordered, shadowed, rounded, or a distinct background
+  // from its parent)? Design files almost always box up each idea this
+  // way, regardless of what class names or markup convention they use —
+  // so this lets hover land on the whole "1.A" block directly instead of
+  // whatever tiny leaf (a label, a toggle) happens to be under the cursor.
+  function looksLikeCard(el) {
+    if (!el || /^(BODY|HTML)$/.test(el.tagName)) return false;
+    // small interactive controls (toggle pills, tabs, buttons, links) are
+    // never the intended "whole design" target even when they're styled
+    // just as boxily as the card they sit inside
+    if (/^(BUTTON|A|INPUT|SELECT|TEXTAREA|LABEL)$/.test(el.tagName)) return false;
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 160 || rect.height < 80) return false;
+    const cs = getComputedStyle(el);
+    if (cs.borderTopWidth !== "0px" && cs.borderTopStyle !== "none") return true;
+    if (cs.boxShadow && cs.boxShadow !== "none") return true;
+    if (parseFloat(cs.borderTopLeftRadius) > 0) return true;
+    const parent = el.parentElement;
+    if (parent && cs.backgroundColor !== "rgba(0, 0, 0, 0)" &&
+        cs.backgroundColor !== getComputedStyle(parent).backgroundColor) return true;
+    return false;
+  }
+
+  function autoSnapLevel(leaf) {
+    let el = leaf, steps = 0;
+    const MAX_STEPS = 10;
+    while (el && steps < MAX_STEPS) {
+      if (looksLikeCard(el)) return steps;
+      if (!el.parentElement || /^(BODY|HTML)$/.test(el.parentElement.tagName)) break;
+      el = el.parentElement;
+      steps++;
+    }
+    return 0; // nothing card-like nearby — fall back to the exact leaf
+  }
+
   function onMouseOver(e) {
     leafEl = e.target;
-    level = 0;
-    setHighlight(leafEl);
-    // hovering an iframe doesn't give it keyboard focus in real browsers;
-    // force it so arrow-key widen/narrow works without requiring a click first
+    level = autoSnapLevel(leafEl);
+    let target = leafEl;
+    for (let i = 0; i < level; i++) target = target.parentElement;
+    setHighlight(target);
     // hovering an iframe doesn't give it real browser focus in real browsers
     // (only the iframe *element* gaining focus routes keydown into it) —
     // force that so arrow-key widen/narrow works without requiring a click first
@@ -336,8 +372,15 @@
     const favs = getFavs();
     favs.push(fav);
     saveFavs(favs);
+    flashSaved(el);
+    // stay in select mode — saving one block shouldn't force re-clicking
+    // "Select component" to save the next one on the same page
+  }
+
+  function flashSaved(el) {
+    el.style.outline = "2px solid #6cff9a";
+    setTimeout(() => { if (hoverEl !== el) el.style.outline = ""; }, 350);
     flashSelectBtn();
-    exitSelectMode();
   }
 
   function enterSelectMode() {
